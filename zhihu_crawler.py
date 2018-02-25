@@ -245,11 +245,8 @@ class ZhiHuTopicCrawler(object):
             pass
 
     def topic_crawler(self):
-        pool = Pool(self.processes)
         for url in self.get_first_level_topic_url(self.start_url):
-            pool.apply_async(self.get_topic_info, (url,))
-        pool.close()
-        pool.join()
+            self.get_topic_info(url)
 
 
 class ZhiHuQuestionCrawler(object):
@@ -412,7 +409,8 @@ class ZhiHuAnswerCrawler(object):
                 author_name = item['author']['name']
                 author_url_token = item['author']['url_token']
                 question_title = item['question']['title']
-                answer_content = ZhiHuCommon.filter_tags(item['content'])
+                question_id = item['question']['id']
+                answer_content = item['content']
                 answer_voteup_count = item['voteup_count']
                 answer_comment_count = item['comment_count']
                 answer_updated_time = time.strftime("%Y-%m-%d", time.localtime(item['updated_time']))
@@ -423,10 +421,11 @@ class ZhiHuAnswerCrawler(object):
                 answer_info = {
                     'type': item['type'],
                     'question_title': question_title,  # 问题标题
+                    'question_id': question_id,  # 问题id
                     'author_name': author_name,  # 回答者名字
                     'author_url_token': author_url_token,  # 回答者url_token
                     'answer_content': answer_content,  # 回答内容
-                    'answer_content_length': len(answer_content),  # 回答长度
+                    'answer_content_length': len(ZhiHuCommon.filter_tags(answer_content)),  # 回答长度
                     'answer_voteup_count': answer_voteup_count,  # 回答赞同数
                     'answer_comment_count': answer_comment_count,  # 回答评论数
                     'answer_updated_time': answer_updated_time,  # 回答编辑时间
@@ -560,9 +559,9 @@ class ZhiHuUserCrawler(object):
                         }
                     employments.append(employment)
             else:
-                employments = [{'company': '暂无数据','job': '暂无数据'}]
+                employments = [{'company': '暂无数据', 'job': '暂无数据'}]
             if json_data.get('educations'):
-                education={}
+                education = {}
                 educations = []
                 for i in range(len(json_data['educations'])):
                     edu_data = json.loads(json.dumps(json_data['educations'][i]))
@@ -583,7 +582,7 @@ class ZhiHuUserCrawler(object):
                         }
                     educations.append(education)
             else:
-                educations = [{'school': '暂无数据','major': '暂无数据'}]
+                educations = [{'school': '暂无数据', 'major': '暂无数据'}]
             if json_data.get('description'):
                 description = ZhiHuCommon.filter_tags(json_data['description'])
             else:
@@ -747,6 +746,141 @@ class ZhiHuColumnCrawler(object):
         pool.join()
 
 
+class ZhiHuDataAnalysis(object):
+    def __init__(self):
+        self.ZhiHuPeople = ZhiHuCommon.ZhiHu_db['people_backup']
+
+    def gender_ratio(self):
+        pipeline = [
+            {'$match': {'gender': {'$ne': '暂无数据'}}},
+            {'$group': {'_id': '$gender', 'counts': {'$sum': 1}}},
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            gender_data = [data['_id'], data['counts']]
+            yield gender_data
+
+    def locations_data_gen(self):
+        pipeline = [
+            {'$unwind': '$locations'},
+            {'$match': {'locations': {'$ne': '暂无数据'}}},
+            {'$group': {'_id': '$locations', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            locations_data = {
+                'name': data['_id'],
+                'data': [data['counts']]
+            }
+            yield locations_data
+
+    def college_data_gen(self):
+        pipeline = [
+            {'$unwind': '$educations'},
+            {'$match': {'$and': [
+                {'educations.school': {'$ne': '暂无数据'}},
+                {'educations.school': {'$ne': '大学'}},
+                {'educations.school': {'$ne': '大学本科'}},
+                {'educations.school': {'$ne': '本科'}}
+            ]}},
+            {'$group': {'_id': '$educations.school', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            college_data = {
+                'name': data['_id'],
+                'data': data['counts']
+            }
+            yield college_data
+
+    def major_data_gen(self):
+        pipeline = [
+            {'$unwind': '$educations'},
+            {'$match': {'educations.major': {'$ne': '暂无数据'}}},
+            {'$group': {'_id': '$educations.major', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            major_data = {
+                'name': data['_id'],
+                'data': data['counts']
+            }
+            yield major_data
+
+    def business_data_gen(self):
+        pipeline = [
+            {'$match': {'business': {'$ne': '暂无数据'}}},
+            {'$group': {'_id': '$business', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            business_data = {
+                'name': data['_id'],
+                'data': data['counts']
+            }
+            yield business_data
+
+    def company_data_gen(self):
+        pipeline = [
+            {'$unwind': '$employments'},
+            {'$match': {'$and': [
+                {'employments.company': {'$ne': '暂无数据'}},
+                {'employments.company': {'$ne': '学生'}},
+                {'employments.company': {'$ne': '自由职业'}},
+                {'employments.company': {'$ne': '无'}}
+            ]}},
+            {'$group': {'_id': '$employments.company', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            company_data = {
+                'name': data['_id'],
+                'data': data['counts']
+            }
+            yield company_data
+
+    def job_data_gen(self):
+        pipeline = [
+            {'$unwind': '$employments'},
+            {'$match': {'$and': [
+                {'employments.job': {'$ne': '暂无数据'}},
+                {'employments.job': {'$ne': '学生'}}
+            ]}},
+            {'$group': {'_id': '$employments.job', 'counts': {'$sum': 1}}},
+            {'$sort': {'counts': -1}},
+            {'$limit': 10}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            job_data = {
+                'name': data['_id'],
+                'data': data['counts']
+            }
+            yield job_data
+
+    def best_author_data(self):
+        pipeline = [
+            {'$sort': {'follower_count': -1}},
+            {'$limit': 100}
+        ]
+        for data in self.ZhiHuPeople.aggregate(pipeline):
+            yield data['author_name']
+
+    def data_analysis(self):
+        gender_ratio_data = [data for data in self.gender_ratio()]
+        locations_data = [data for data in self.locations_data_gen()]
+        college_data = [data for data in self.college_data_gen()]
+        major_data = [data for data in self.major_data_gen()]
+        business_data = [data for data in self.business_data_gen()]
+        company_data = [data for data in self.company_data_gen()]
+        job_data = [data for data in self.job_data_gen()]
+        best_author100 = [data for data in self.best_author_data()]
+        print(best_author100)
+
+
 if __name__ == '__main__':
     # TopicCrawler = ZhiHuTopicCrawler()
     # TopicCrawler.topic_crawler()
@@ -757,8 +891,11 @@ if __name__ == '__main__':
     # AnswerCrawler = ZhiHuAnswerCrawler()
     # AnswerCrawler.answer_crawler()
 
-    UserCrawler = ZhiHuUserCrawler()
-    UserCrawler.user_crawler()
+    # UserCrawler = ZhiHuUserCrawler()
+    # UserCrawler.user_crawler()
 
     # ColumnCrawler = ZhiHuColumnCrawler()
     # ColumnCrawler.column_crawler()
+
+    data_analysis = ZhiHuDataAnalysis()
+    data_analysis.data_analysis()
